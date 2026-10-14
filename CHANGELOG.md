@@ -1,3 +1,6 @@
+## 2.33.0
+- **FEAT**(android, iOS, macOS): `ImageLayer.audioVisualizer` draws bars, mirrored bars, a wave or a ring of bars that move with the sound, from band levels the app passes as a `LayerAudioVisualizer`. `AudioVisualizerPainter` draws the same shapes for an editor preview.
+
 ## 2.32.2
 - **FIX**(android): In apps minified with R8, exports on Android 11 and older no longer fail with `Video frame processing error` or, under R8 full mode, crash the app with `NoClassDefFoundError`. The plugin now ships consumer ProGuard rules for Media3.
 

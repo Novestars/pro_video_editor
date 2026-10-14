@@ -39,6 +39,9 @@ struct ImageLayer {
   var keyframes: [KeyframeConfig] = []
   /// The clock `keyframes` are timed on; see `KeyframeClock`.
   var keyframeClock: KeyframeClock = .output
+  /// Draws an audio visualizer into the layer's box for each frame instead of
+  /// `frames`, which is then empty.
+  var visualizer: AudioVisualizerRenderer? = nil
 
   /// The frame to display at composition time [currentTimeUs].
   ///
@@ -362,6 +365,37 @@ class VideoCompositor: NSObject, AVVideoCompositing {
     overlayImageLayers = []
     hasUnreadableCensorMask = false
     for layer in layers {
+      if let visualizer = layer.audioVisualizer {
+        // A positioned visualizer has no box to fill without a size; Android
+        // skips it as well.
+        let isStretched = layer.x == nil && layer.y == nil
+        if !isStretched && (layer.width == nil || layer.height == nil) { continue }
+        // Drawn for each frame; the layer's image is never read. A layer that
+        // keyframes grow is drawn at its largest size, so it stays sharp.
+        let growth = max(1, layer.keyframes.map(\.scale).max() ?? 1)
+        overlayImageLayers.append(
+          ImageLayer(
+            frames: [],
+            frameEndsUs: [0],
+            loop: false,
+            animationOffsetUs: 0,
+            startUs: layer.startUs,
+            endUs: layer.endUs,
+            x: layer.x,
+            y: layer.y,
+            width: layer.width,
+            height: layer.height,
+            rotation: layer.rotation,
+            animations: layer.animations,
+            animationStartUs: layer.animationStartUs,
+            animationEndUs: layer.animationEndUs,
+            keyframes: layer.keyframes,
+            keyframeClock: layer.keyframeClock,
+            visualizer: AudioVisualizerRenderer(
+              config: visualizer, rasterScale: CGFloat(growth))
+          ))
+        continue
+      }
       let frames: [CIImage]
       let frameEndsUs: [Int64]
 
@@ -409,7 +443,20 @@ class VideoCompositor: NSObject, AVVideoCompositing {
   private func drawImageLayer(
     _ layer: ImageLayer, over outputImage: CIImage, imageRect: CGRect, currentTimeUs: Int64
   ) -> CIImage {
-    var img = layer.currentFrame(atUs: currentTimeUs)
+    var img: CIImage
+    if let visualizer = layer.visualizer {
+      // The visualizer fills the layer's box, or the frame for a stretched
+      // layer whatever its size, as on Android: drawn in its size and
+      // stretched over the frame, a ring would come out as an ellipse.
+      let box =
+        layer.x == nil && layer.y == nil
+        ? imageRect.size : CGSize(width: layer.width ?? 0, height: layer.height ?? 0)
+      img = visualizer.image(atUs: currentTimeUs, box: box)
+      // A box of no size draws nothing.
+      if img.extent.isEmpty || img.extent.isInfinite { return outputImage }
+    } else {
+      img = layer.currentFrame(atUs: currentTimeUs)
+    }
 
     if let w = layer.width, let h = layer.height {
       let sx = CGFloat(w) / img.extent.width
