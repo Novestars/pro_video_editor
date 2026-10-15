@@ -1,3 +1,7 @@
+## 2.33.1
+- **FIX**(iOS): Leaving the app during a render or a stop-motion render no longer fails it with `Operation Interrupted`. It keeps running in the background while iOS allows (about 30 s), and otherwise starts over once the app is back.
+- **FIX**(iOS, macOS): A render without a bitrate cap and a stop-motion render overwrite a file already at the output path instead of failing.
+
 ## 2.33.0
 - **FEAT**(android, iOS, macOS): `ImageLayer.audioVisualizer` draws bars, mirrored bars, a wave or a ring of bars that move with the sound, from band levels the app passes as a `LayerAudioVisualizer`. `AudioVisualizerPainter` draws the same shapes for an editor preview.
 
