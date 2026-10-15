@@ -23,6 +23,7 @@ import ch.waio.pro_video_editor.src.features.render.models.KeyframeConfig
 import ch.waio.pro_video_editor.src.features.render.models.LayerAudioVisualizerConfig
 import ch.waio.pro_video_editor.src.features.render.models.LayerCensorConfig
 import ch.waio.pro_video_editor.src.features.render.models.VideoClip
+import ch.waio.pro_video_editor.src.features.thumbnail.SequentialFrameDecoder
 import ch.waio.pro_video_editor.src.features.render.utils.getRotatedVideoDimensions
 import ch.waio.pro_video_editor.src.shared.logging.PluginLog as Log
 import ch.waio.pro_video_editor.src.shared.media.EncodedImage
@@ -547,6 +548,22 @@ class VideoSequenceBuilder(
     }
 
     /**
+     * Where a clip trimmed to [startUs] anchors its stabilization keyframes:
+     * the presentation time of the first frame of [inputPath] at or after
+     * [startUs], the frame the clip starts with, and the source's median frame
+     * duration.
+     */
+    private fun stabilizationAnchor(inputPath: String, startUs: Long): Pair<Long, Long> {
+        val samples = SequentialFrameDecoder(context).scan(inputPath).samplePts
+        val index = samples.binarySearch(startUs).let { if (it >= 0) it else -it - 1 }
+        val frameUs = (1 until samples.size)
+            .map { samples[it] - samples[it - 1] }
+            .sorted()
+            .let { gaps -> if (gaps.isEmpty()) 0L else gaps[gaps.size / 2] }
+        return samples.getOrElse(index) { samples.last() } to frameUs
+    }
+
+    /**
      * Builds an EditedMediaItem for a single video clip with all effects.
      *
      * @param layerFrame The composition frame the image layers are laid out
@@ -615,6 +632,26 @@ class VideoSequenceBuilder(
         if (clipSpeed != null) {
             Log.d(RENDER_TAG, "Clip $index playback speed: ${clipSpeed}x")
             clipVideoEffects += SpeedChangeEffect(clipSpeed)
+        }
+
+        // Stabilization first: its keyframes are keyed by source frame, so it
+        // must see the frames as decoded, before anything moves or crops them.
+        clip.stabilization?.let { stabilization ->
+            if (clipSpeed != null || clip.reverseVideo) {
+                Log.w(
+                    RENDER_TAG,
+                    "Clip $index: stabilization is not supported with a playback " +
+                            "speed or reverse yet and is skipped"
+                )
+            } else {
+                val (firstPts, frameUs) =
+                    stabilizationAnchor(clip.inputPath, clip.startUs ?: 0L)
+                Log.d(
+                    RENDER_TAG,
+                    "Clip $index stabilization from source $firstPts us, frames $frameUs us apart"
+                )
+                clipVideoEffects += StabilizationTransformation(stabilization, firstPts, frameUs)
+            }
         }
 
         // Chroma key next, so it sees the original decoded colors — before
@@ -900,12 +937,21 @@ class VideoSequenceBuilder(
                     includeAudio = enableAudio && (clip.volume ?: 1.0f) > 0f,
                 )
                 temporaryFiles.add(java.io.File(reversed.outputPath))
+                if (clip.stabilization != null) {
+                    Log.w(
+                        RENDER_TAG,
+                        "Stabilization is not supported with reverse yet and is skipped: " +
+                                clip.inputPath
+                    )
+                }
                 result.add(
                     clip.copy(
                         inputPath = reversed.outputPath,
                         startUs = 0L,
                         endUs = reversed.durationUs.takeIf { it > 0 },
-                        reverseVideo = false
+                        reverseVideo = false,
+                        // Its keyframes belong to the forward source's timestamps.
+                        stabilization = null
                     )
                 )
             } catch (e: Exception) {

@@ -231,9 +231,14 @@ internal class VideoSequenceBuilder {
       }
 
       // Store instruction for this clip segment
+      let sourceFrameDuration =
+        nominalFrameRate > 0
+        ? CMTime(seconds: 1 / Double(nominalFrameRate), preferredTimescale: 1_000_000) : .zero
       clipInstructions.append(
         ClipInstruction(
           timeRange: CMTimeRange(start: insertStart, duration: effectiveDuration),
+          sourceStart: clipTimeRange.start,
+          sourceFrameDuration: sourceFrameDuration,
           transform: preferredTransform,
           naturalSize: naturalSize,
           renderSize: correctedSize
@@ -463,6 +468,10 @@ internal class VideoSequenceBuilder {
 /// Instruction for a single clip in the sequence.
 internal struct ClipInstruction {
   let timeRange: CMTimeRange
+  /// The time in the clip's file that plays at `timeRange.start`.
+  let sourceStart: CMTime
+  /// The frame duration of the clip's file; zero when it is unknown.
+  let sourceFrameDuration: CMTime
   let transform: CGAffineTransform
   let naturalSize: CGSize
   let renderSize: CGSize
@@ -487,6 +496,8 @@ internal struct VideoCompositionData {
   var instructions: [AVVideoCompositionInstructionProtocol]
   let frameDuration: CMTime
   var renderSize: CGSize
+  /// One window per stabilized clip; single-track path only.
+  var stabilizationWindows: [StabilizationWindow] = []
 }
 
 /// Placement of one video layer inside a layered composition window.

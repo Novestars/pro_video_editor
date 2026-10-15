@@ -259,6 +259,17 @@ class RenderVideo {
           // Dip-to-color (fade-to-black / fade-to-white) clip transitions.
           effectsConfig.fadeWindows = fadeWindows
 
+          // Stabilization keys each frame by its source time, which a
+          // render-wide speed change no longer maps one to one.
+          if !videoCompData.stabilizationWindows.isEmpty {
+            if let speed = workingConfig.playbackSpeed, speed > 0, speed != 1 {
+              PluginLog.print(
+                "⚠️ Stabilization is not supported with a render-wide playback speed yet; skipped")
+            } else {
+              effectsConfig.stabilizationWindows = videoCompData.stabilizationWindows
+            }
+          }
+
           // Apply playback speed to the entire composition
           videoCompConfig.instructions = applyPlaybackSpeed(
             composition: composition, instructions: videoCompConfig.instructions,
@@ -860,7 +871,8 @@ class RenderVideo {
             volume: current.volume, equalizer: current.equalizer,
             playbackSpeed: current.playbackSpeed,
             reverseVideo: false, transition: nil, chromaKey: current.chromaKey,
-            frameRateOverride: current.frameRateOverride))
+            frameRateOverride: current.frameRateOverride,
+            stabilization: current.stabilization))
         let blend = blendChromaKey(
           current, next!, global: globalChromaKey, boundary: "\(i)")
         result.append(
@@ -873,7 +885,8 @@ class RenderVideo {
           volume: next!.volume, equalizer: next!.equalizer,
           playbackSpeed: next!.playbackSpeed,
           reverseVideo: next!.reverseVideo, transition: next!.transition,
-          chromaKey: next!.chromaKey, frameRateOverride: next!.frameRateOverride)
+          chromaKey: next!.chromaKey, frameRateOverride: next!.frameRateOverride,
+          stabilization: next!.stabilization)
       } else {
         PluginLog.print("⚠️ Transition render failed at boundary \(i); hard cut")
         appendClip(clearedOverlap(current))
@@ -969,20 +982,21 @@ class RenderVideo {
               inputPath: first.inputPath, startUs: firstStart + headSrc,
               endUs: lastEnd - tailSrc, volume: first.volume, equalizer: first.equalizer,
               playbackSpeed: first.playbackSpeed, reverseVideo: false, transition: nil,
-              chromaKey: first.chromaKey, frameRateOverride: first.frameRateOverride)
+              chromaKey: first.chromaKey, frameRateOverride: first.frameRateOverride,
+              stabilization: first.stabilization)
           } else {
             result[0] = VideoClip(
               inputPath: first.inputPath, startUs: firstStart + headSrc,
               endUs: first.endUs, volume: first.volume, equalizer: first.equalizer,
               playbackSpeed: first.playbackSpeed, reverseVideo: false,
               transition: first.transition, chromaKey: first.chromaKey,
-              frameRateOverride: first.frameRateOverride)
+              frameRateOverride: first.frameRateOverride, stabilization: first.stabilization)
             result[lastIdx] = VideoClip(
               inputPath: last.inputPath, startUs: last.startUs, endUs: lastEnd - tailSrc,
               volume: last.volume, equalizer: last.equalizer,
               playbackSpeed: last.playbackSpeed,
               reverseVideo: false, transition: nil, chromaKey: last.chromaKey,
-              frameRateOverride: last.frameRateOverride)
+              frameRateOverride: last.frameRateOverride, stabilization: last.stabilization)
           }
           let wrapBlend = blendChromaKey(
             last, first, global: globalChromaKey, boundary: "loop wrap")
@@ -1018,7 +1032,7 @@ class RenderVideo {
       inputPath: clip.inputPath, startUs: clip.startUs, endUs: clip.endUs,
       volume: clip.volume, equalizer: clip.equalizer, playbackSpeed: clip.playbackSpeed,
       reverseVideo: clip.reverseVideo, transition: nil, chromaKey: clip.chromaKey,
-      frameRateOverride: clip.frameRateOverride)
+      frameRateOverride: clip.frameRateOverride, stabilization: clip.stabilization)
   }
 
   /// The chroma key to apply to a pre-rendered overlap blend.

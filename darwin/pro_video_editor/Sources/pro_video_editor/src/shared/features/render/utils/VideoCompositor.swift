@@ -214,6 +214,7 @@ class VideoCompositor: NSObject, AVVideoCompositing {
 
   /// Per-clip chroma-key windows (single-track path).
   private var chromaKeyWindows: [ChromaKeyWindow] = []
+  private var stabilizationWindows: [StabilizationWindow] = []
 
   /// Decoded chroma-key background images, keyed by config, so a background is
   /// decoded once per render rather than once per frame.
@@ -298,6 +299,16 @@ class VideoCompositor: NSObject, AVVideoCompositing {
     self.customEffects = config.customEffects
     self.fadeWindows = config.fadeWindows
     self.chromaKeyWindows = config.chromaKeyWindows
+    self.stabilizationWindows = config.stabilizationWindows
+  }
+
+  /// Steadies the upright source frame shown at composition time `tUs` with
+  /// its clip's stabilization, if any.
+  private func applyStabilizationStage(to image: CIImage, atUs tUs: Int64) -> CIImage {
+    guard !stabilizationWindows.isEmpty,
+      let window = stabilizationWindows.first(where: { tUs >= $0.startUs && tUs < $0.endUs })
+    else { return image }
+    return applyStabilization(window.transform(atCompositionUs: tUs), to: image)
   }
 
   /// The chroma key active at the given composition time, if any.
@@ -676,7 +687,8 @@ class VideoCompositor: NSObject, AVVideoCompositing {
     let extent = image.extent
     var output = image
     for stage in customEffects where stage.config.isActive(atUs: tUs) {
-      let history: [CIImage?] = stage.historyTrackIDs.map { trackID in
+      let history: [CIImage?] = zip(stage.historyTrackIDs, stage.historyOffsetsUs).map {
+        trackID, offsetUs in
         guard trackID != kCMPersistentTrackID_Invalid,
           let buffer = request.sourceFrame(byTrackID: trackID)
         else { return nil }
@@ -685,6 +697,11 @@ class VideoCompositor: NSObject, AVVideoCompositing {
         if let orientation {
           frame = applyingAVFoundationTransform(orientation, to: frame)
         }
+        // The earlier frame steadied as it was when it was on screen.
+        frame = applyStabilizationStage(
+          to: frame,
+          atUs: Int64((CMTimeGetSeconds(request.compositionTime) * 1_000_000).rounded())
+            - offsetUs)
         return resampled(frame, scale: stage.historyScale).cropped(to: extent)
       }
       let frame = CustomVideoEffectFrame(
@@ -1148,6 +1165,12 @@ class VideoCompositor: NSObject, AVVideoCompositing {
           orientation = startTransform
         }
       }
+
+      // On the upright frame, whose size the stabilization's shifts are
+      // fractions of.
+      outputImage = applyStabilizationStage(
+        to: outputImage,
+        atUs: Int64((CMTimeGetSeconds(request.compositionTime) * 1_000_000).rounded()))
 
       outputImage = applyCustomEffectStage(
         to: outputImage, request: request, orientation: orientation)

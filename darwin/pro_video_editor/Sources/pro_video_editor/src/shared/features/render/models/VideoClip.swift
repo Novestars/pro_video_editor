@@ -39,6 +39,9 @@ internal struct VideoClip: Sendable {
   /// 30 fps phone footage that opens on a sliver of a frame reads 33.3, and
   /// the render derives its frame duration from it. `nil` = use the file's.
   let frameRateOverride: Float?
+  /// Per-frame transforms that steady this clip. Single-track path only;
+  /// `nil` leaves the frames where they are.
+  let stabilization: StabilizationConfig?
 
   init(
     inputPath: String,
@@ -53,7 +56,8 @@ internal struct VideoClip: Sendable {
     transform: SegmentTransformConfig? = nil,
     chromaKey: ChromaKeyConfig? = nil,
     suppressChromaKey: Bool = false,
-    frameRateOverride: Float? = nil
+    frameRateOverride: Float? = nil,
+    stabilization: StabilizationConfig? = nil
   ) {
     self.inputPath = inputPath
     self.startUs = startUs
@@ -68,13 +72,19 @@ internal struct VideoClip: Sendable {
     self.chromaKey = chromaKey
     self.suppressChromaKey = suppressChromaKey
     self.frameRateOverride = frameRateOverride
+    self.stabilization = stabilization
   }
 
   /// This clip playing `startUs..<endUs` of `inputPath` instead of its own
   /// source window; every other setting is kept. `frameRateOverride` is the
   /// new file's: a cadence measured on the old one does not carry over.
+  ///
+  /// `sourceShiftUs` is how much later in the clip's current file a time in
+  /// `inputPath` lies: non-zero only for a pre-transcode of part of it, whose
+  /// timeline starts later. A re-trim of the same file leaves it at zero.
   func reading(
-    _ inputPath: String, startUs: Int64?, endUs: Int64?, frameRateOverride: Float? = nil
+    _ inputPath: String, startUs: Int64?, endUs: Int64?, frameRateOverride: Float? = nil,
+    sourceShiftUs: Int64 = 0
   ) -> VideoClip {
     VideoClip(
       inputPath: inputPath,
@@ -89,7 +99,8 @@ internal struct VideoClip: Sendable {
       transform: transform,
       chromaKey: chromaKey,
       suppressChromaKey: suppressChromaKey,
-      frameRateOverride: frameRateOverride
+      frameRateOverride: frameRateOverride,
+      stabilization: stabilization?.shifted(by: sourceShiftUs)
     )
   }
 
@@ -114,6 +125,9 @@ internal struct VideoClip: Sendable {
       ),
       chromaKey: ChromaKeyConfig.fromArguments(
         clipMap["chromaKey"] as? [String: Any]
+      ),
+      stabilization: StabilizationConfig.fromArguments(
+        clipMap["stabilization"] as? [String: Any]
       )
     )
   }
