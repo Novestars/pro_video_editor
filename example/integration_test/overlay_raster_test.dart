@@ -1,3 +1,4 @@
+import 'dart:io' show zlib;
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -333,6 +334,143 @@ void main() {
       expect(_classify(frame.at(0.75, 0.75)), _Hue.yellow);
     });
   });
+
+  /// Static layers in a row that share a time range are drawn into one image,
+  /// so memory stays flat however many stickers a video carries. Each of them
+  /// has to land exactly where it does when it is drawn on its own: these
+  /// repeat the single-layer cases above next to a transparent layer, which
+  /// puts them on that path.
+  group('Static layers drawn as one image', () {
+    late EditorLayerImage transparent;
+
+    setUpAll(() async {
+      transparent = EditorLayerImage.memory(await _encode(4, 4, (_) {}));
+    });
+
+    testWidgets('a positioned layer keeps its box', (_) async {
+      final frame = await renderAndDecode([
+        ImageLayer(image: transparent),
+        ImageLayer(
+          image: EditorLayerImage.memory(await _solidImage(200, 100)),
+          offset: const Offset(100, 50),
+          size: const Size(200, 100),
+        ),
+      ], output: const Size(640, 360));
+      final box = _boundsOf(frame);
+
+      expect(box, isNotNull, reason: 'the layer is not in the frame at all');
+      _expectBox(box!, left: 50, top: 25, right: 150, bottom: 75);
+    });
+
+    testWidgets('a turned layer stays centred on its anchor', (_) async {
+      final frame = await renderAndDecode([
+        ImageLayer(
+          image: EditorLayerImage.memory(await _solidImage(200, 200)),
+          offset: const Offset(540, 260),
+          size: const Size(200, 200),
+          rotation: math.pi / 4,
+        ),
+        ImageLayer(image: transparent),
+      ], output: const Size(640, 360));
+      final box = _boundsOf(frame);
+
+      expect(box, isNotNull, reason: 'the layer is not in the frame at all');
+      _expectBox(
+        box!,
+        left: 249,
+        top: 109,
+        right: 391,
+        bottom: 251,
+        tolerance: 10,
+      );
+      expect(
+        _isSolid(frame.at(250 / 640, 110 / 360)),
+        isFalse,
+        reason: 'the corner of the bounding box is outside the diamond',
+      );
+    });
+
+    testWidgets('a later layer is drawn over an earlier one', (_) async {
+      final quadrants = EditorLayerImage.memory(await _quadrantImage());
+      final box = ImageLayer(
+        image: EditorLayerImage.memory(await _solidImage(200, 100)),
+        offset: const Offset(100, 50),
+        size: const Size(200, 100),
+      );
+
+      final over = await renderAndDecode([
+        ImageLayer(image: quadrants),
+        box,
+      ], output: const Size(640, 360));
+      final under = await renderAndDecode([
+        box,
+        ImageLayer(image: quadrants),
+      ], output: const Size(640, 360));
+
+      expect(_isSolid(over.at(100 / 640, 50 / 360)), isTrue);
+      expect(_classify(over.at(0.75, 0.75)), _Hue.yellow);
+      expect(_isSolid(under.at(100 / 640, 50 / 360)), isFalse);
+      expect(_classify(under.at(100 / 640, 50 / 360)), _Hue.red);
+    });
+
+    testWidgets('layers show only over their time range', (_) async {
+      final quadrants = EditorLayerImage.memory(await _quadrantImage());
+      List<ImageLayer> shownFrom(Duration start, Duration end) => [
+        ImageLayer(image: transparent, startTime: start, endTime: end),
+        ImageLayer(image: quadrants, startTime: start, endTime: end),
+      ];
+
+      final shown = await renderAndDecode(
+        shownFrom(
+          const Duration(milliseconds: 500),
+          const Duration(seconds: 2),
+        ),
+        output: const Size(640, 360),
+      );
+      final hidden = await renderAndDecode(
+        shownFrom(
+          const Duration(milliseconds: 1500),
+          const Duration(seconds: 2),
+        ),
+        output: const Size(640, 360),
+      );
+
+      expect(_classify(shown.at(0.25, 0.25)), _Hue.red);
+      expect(_classify(shown.at(0.25, 0.75)), _Hue.blue);
+      // Checked where the footage carries none of the quadrant colours.
+      expect(_classify(hidden.at(0.25, 0.25)), _Hue.other);
+      expect(_classify(hidden.at(0.25, 0.75)), _Hue.other);
+    });
+
+    testWidgets('a wide-gamut image keeps its colours', (_) async {
+      // A teal tagged as Display P3, as a photo from a phone gallery is.
+      // Converted into sRGB its red channel drops from 60 to 0. Drawn as one
+      // image with other layers, it has to keep the colours it has on its own.
+      final layer = ImageLayer(
+        image: EditorLayerImage.memory(_displayP3Png(200, 100, 60, 200, 200)),
+        offset: const Offset(100, 50),
+        size: const Size(200, 100),
+      );
+
+      final alone = await renderAndDecode([
+        layer,
+      ], output: const Size(640, 360));
+      final drawnTogether = await renderAndDecode([
+        ImageLayer(image: transparent),
+        layer,
+      ], output: const Size(640, 360));
+
+      final expected = alone.at(100 / 640, 50 / 360);
+      final actual = drawnTogether.at(100 / 640, 50 / 360);
+      for (var channel = 0; channel < 3; channel++) {
+        expect(
+          actual[channel],
+          closeTo(expected[channel], 8),
+          reason: 'drawn together $actual, drawn alone $expected',
+        );
+      }
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +521,60 @@ Future<Uint8List> _stripedImage(int width, int height, {int stripe = 4}) =>
         );
       }
     });
+
+/// A [width] x [height] PNG of one opaque colour whose `cHRM` chunk tags it
+/// with the Display P3 primaries, so a decoder that manages colour reads its
+/// values as P3 rather than sRGB.
+Uint8List _displayP3Png(int width, int height, int r, int g, int b) {
+  final rows = BytesBuilder();
+  for (var y = 0; y < height; y++) {
+    rows.addByte(0); // No filter.
+    for (var x = 0; x < width; x++) {
+      rows
+        ..addByte(r)
+        ..addByte(g)
+        ..addByte(b);
+    }
+  }
+  // White point, red, green and blue, as x and y times 100 000.
+  const primaries = [31270, 32900, 68000, 32000, 26500, 69000, 15000, 6000];
+  final chromaticities = ByteData(primaries.length * 4);
+  for (var i = 0; i < primaries.length; i++) {
+    chromaticities.setUint32(i * 4, primaries[i]);
+  }
+  final header = ByteData(13)
+    ..setUint32(0, width)
+    ..setUint32(4, height)
+    ..setUint8(8, 8) // Bits per channel.
+    ..setUint8(9, 2); // RGB.
+  final png = BytesBuilder()
+    ..add(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    ..add(_pngChunk('IHDR', header.buffer.asUint8List()))
+    ..add(_pngChunk('cHRM', chromaticities.buffer.asUint8List()))
+    ..add(_pngChunk('IDAT', zlib.encode(rows.takeBytes())))
+    ..add(_pngChunk('IEND', const []));
+  return png.takeBytes();
+}
+
+/// One PNG chunk: the length of [data], [type], [data] and the CRC-32 of
+/// [type] and [data].
+List<int> _pngChunk(String type, List<int> data) {
+  final body = [...type.codeUnits, ...data];
+  var crc = 0xFFFFFFFF;
+  for (final byte in body) {
+    crc ^= byte;
+    for (var bit = 0; bit < 8; bit++) {
+      crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
+    }
+  }
+  final length = ByteData(4)..setUint32(0, data.length);
+  final checksum = ByteData(4)..setUint32(0, crc ^ 0xFFFFFFFF);
+  return [
+    ...length.buffer.asUint8List(),
+    ...body,
+    ...checksum.buffer.asUint8List(),
+  ];
+}
 
 Future<Uint8List> _encode(
   int width,

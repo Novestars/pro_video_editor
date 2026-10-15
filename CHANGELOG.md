@@ -1,3 +1,6 @@
+## 2.33.2
+- **FIX**(android, iOS, macOS): A render's memory no longer grows with every still image layer. A video with 200 stickers or drawing strokes now needs about as much as one with a single sticker, and exports faster.
+
 ## 2.33.1
 - **FIX**(iOS): Leaving the app during a render or a stop-motion render no longer fails it with `Operation Interrupted`. It keeps running in the background while iOS allows (about 30 s), and otherwise starts over once the app is back.
 - **FIX**(iOS, macOS): A render without a bitrate cap and a stop-motion render overwrite a file already at the output path instead of failing.
