@@ -1,3 +1,6 @@
+## 2.33.3
+- **FIX**(iOS, macOS): The audio crossfade of an overlap transition and of the loop-restart blend now follows the transition's curve, like the picture and the Android export, instead of a straight line. Through an elastic curve's overshoot each clip holds at its own volume or at silence.
+
 ## 2.33.2
 - **FIX**(android, iOS, macOS): A render's memory no longer grows with every still image layer. A video with 200 stickers or drawing strokes now needs about as much as one with a single sticker, and exports faster.
 
