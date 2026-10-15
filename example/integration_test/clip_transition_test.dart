@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+import 'dart:ui' show Size, instantiateImageCodec;
+
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter_test/flutter_test.dart';
@@ -420,6 +423,130 @@ void main() {
         meta,
         const Duration(seconds: 1),
         'too-short clip must fall back to no wrap (full duration)',
+      );
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────
+  // Render end — blends that would start after endTime are left out
+  // ───────────────────────────────────────────────────────────
+  group('Clip transitions — render end', () {
+    const windowDuration = Duration(seconds: 2);
+    const endTime = Duration(seconds: 3);
+    const dissolve = ClipTransition(
+      type: ClipTransitionType.dissolve,
+      duration: overlapDuration,
+    );
+
+    /// [count] 2 s windows of the demo clip, each dissolving into the next;
+    /// the last one into the first when [loop] is set.
+    List<VideoSegment> windows(int count, {bool loop = false}) => [
+      for (var i = 0; i < count; i++)
+        VideoSegment(
+          video: inputVideo,
+          startTime: windowDuration * (i % 5),
+          endTime: windowDuration * (i % 5 + 1),
+          transition: i < count - 1 || loop ? dissolve : null,
+        ),
+    ];
+
+    testWidgets('a long timeline stops at the end time', (_) async {
+      // Only the first two of the 19 blends start before 3 s.
+      final meta = await render(
+        'long-timeline-render-end',
+        VideoRenderData(
+          outputFormat: VideoOutputFormat.mp4,
+          videoSegments: windows(20),
+          endTime: endTime,
+        ),
+      );
+      expectDuration(meta, endTime, 'the output must stop at the end time');
+    });
+
+    testWidgets('a loop wrap after the end time still stops there', (_) async {
+      final meta = await render(
+        'loop-wrap-render-end',
+        VideoRenderData(
+          outputFormat: VideoOutputFormat.mp4,
+          videoSegments: windows(20, loop: true),
+          endTime: endTime,
+        ),
+      );
+      expectDuration(meta, endTime, 'the output must stop at the end time');
+    });
+
+    testWidgets('a clip whose container outlasts its video keeps the blend '
+        'after it', (_) async {
+      // demo_world.mp4's container runs ~0.5 s past its last frame, and the
+      // render plays the clip only up to that frame. The dissolve after it
+      // starts at ~2.23 s, so a 2.6 s end shows its first third, exactly as a
+      // longer render does.
+      Future<Uint8List> renderUntil(Duration end) async {
+        final result = await ProVideoEditor.instance.renderVideo(
+          VideoRenderData(
+            outputFormat: VideoOutputFormat.mp4,
+            videoSegments: [
+              VideoSegment(
+                video: EditorVideo.asset(kVideoEditorExampleAssetWorldPath),
+                startTime: const Duration(seconds: 29),
+              ),
+              VideoSegment(
+                video: inputVideo,
+                startTime: Duration.zero,
+                endTime: windowDuration,
+                transition: dissolve,
+              ),
+              VideoSegment(
+                video: inputVideo,
+                startTime: const Duration(seconds: 10),
+                endTime: const Duration(seconds: 12),
+              ),
+            ],
+            endTime: end,
+          ),
+        );
+        expect(result.lengthInBytes, greaterThan(10000));
+        return result;
+      }
+
+      Future<ByteData> frameAt(Uint8List video, Duration at) async {
+        final thumbnails = await ProVideoEditor.instance.getThumbnails(
+          ThumbnailConfigs(
+            video: EditorVideo.memory(video),
+            outputFormat: ThumbnailFormat.png,
+            timestamps: [at],
+            outputSize: const Size(160, 90),
+            boxFit: ThumbnailBoxFit.cover,
+          ),
+        );
+        expect(thumbnails, isNotEmpty, reason: 'no frame at $at');
+        final codec = await instantiateImageCodec(thumbnails.first);
+        final image = (await codec.getNextFrame()).image;
+        return (await image.toByteData())!;
+      }
+
+      const sampleAt = Duration(milliseconds: 2500);
+      final short = await frameAt(
+        await renderUntil(const Duration(milliseconds: 2600)),
+        sampleAt,
+      );
+      final long = await frameAt(
+        await renderUntil(const Duration(milliseconds: 3400)),
+        sampleAt,
+      );
+
+      var difference = 0;
+      for (var i = 0; i < short.lengthInBytes; i += 4) {
+        for (var channel = 0; channel < 3; channel++) {
+          difference +=
+              (short.getUint8(i + channel) - long.getUint8(i + channel)).abs();
+        }
+      }
+      final meanDifference = difference / (short.lengthInBytes / 4 * 3);
+      expect(
+        meanDifference,
+        lessThan(4),
+        reason: 'the frame at $sampleAt must show the dissolve in both renders',
       );
     });
   });
