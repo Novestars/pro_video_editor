@@ -1,3 +1,6 @@
+## 2.37.0
+- **FEAT**(android): `RenderEncoderException.codecKind` says whether a decoder or the encoder could not be acquired, and `RenderEncoderException.details` keeps what the platform reported. Only a decoder shortage is fixed by fewer layers or released preview players, so an app can now tell the user what to change.
+
 ## 2.36.0
 - **FEAT**(android, iOS, macOS): Object tracking. `VideoObjectTracker.trackVideo` follows a region marked on one frame forward and backward through a clip, in a background isolate and without an ML model, so a text or sticker can be pinned to a moving subject. A loosely drawn region follows the subject, not the background around it. The returned `VideoObjectTrack` holds the object's position, size, scale and rotation per frame and says where it was lost, e.g. when it left the frame.
 
