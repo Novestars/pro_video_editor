@@ -1,3 +1,6 @@
+## 2.36.0
+- **FEAT**(android, iOS, macOS): Object tracking. `VideoObjectTracker.trackVideo` follows a region marked on one frame forward and backward through a clip, in a background isolate and without an ML model, so a text or sticker can be pinned to a moving subject. A loosely drawn region follows the subject, not the background around it. The returned `VideoObjectTrack` holds the object's position, size, scale and rotation per frame and says where it was lost, e.g. when it left the frame.
+
 ## 2.35.0
 - **FEAT**(android, iOS, macOS): Video stabilization. `VideoStabilizationAnalyzer.analyzeVideo` measures the camera shake in a clip with classical motion estimation in a background isolate (no ML model) and plans a steadier path that zooms in no further than `maxZoom`; where steadying would need more, some shake stays. `VideoSegment.stabilization` applies the result in a render, each frame by its source timestamp.
 - **FEAT**(android, iOS, macOS): `getLumaFrameStream` streams every frame of a range as raw 8-bit grayscale with its source timestamp, upright and in presentation order, for motion analysis without image encoding.
