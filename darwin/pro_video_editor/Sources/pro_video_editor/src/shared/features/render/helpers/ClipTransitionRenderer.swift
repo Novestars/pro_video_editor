@@ -2,9 +2,8 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 
-/// Pre-renders an **overlap** clip transition (dissolve / slide / push / wipe)
-/// into a single short clip that the main render pipeline consumes as an
-/// ordinary forward clip.
+/// Pre-renders an **overlap** clip transition into a single short clip that
+/// the main render pipeline consumes as an ordinary forward clip.
 ///
 /// It builds a tiny two-track `AVMutableComposition` (outgoing tail on track A,
 /// incoming head on track B, fully overlapping for the transition duration) and
@@ -13,7 +12,9 @@ import Foundation
 /// - **dissolve** → opacity ramp on the top layer,
 /// - **slide** → transform ramp on the incoming layer,
 /// - **push** → transform ramps on both layers,
-/// - **wipe** → crop-rectangle ramp on the incoming layer.
+/// - **wipe** → crop-rectangle ramp on the incoming layer,
+/// - every type ``ClipTransitionEffects`` handles → ``ClipTransitionCompositor``,
+///   which draws each frame from both source frames with Core Image.
 ///
 /// The ramps are applied piecewise so the requested easing [curve] is honored.
 /// Audio is cross-faded along the same curve via an `AVMutableAudioMix`. The
@@ -112,21 +113,33 @@ internal enum ClipTransitionRenderer {
 
       let outStart = CMTime(value: outTailStartUs, timescale: 1_000_000)
       let inStart = CMTime(value: inHeadStartUs, timescale: 1_000_000)
-      try trackA.insertTimeRange(
-        CMTimeRange(start: outStart, duration: outTailDur), of: outVideo, at: .zero)
-      try trackB.insertTimeRange(
-        CMTimeRange(start: inStart, duration: inHeadDur), of: inVideo, at: .zero)
+      // Only the part of each span its video track holds. A container can
+      // outlast its video (demo_world.mp4 by ~0.5 s), and `insertTimeRange`
+      // silently stops at the track's end: the blend then had no outgoing
+      // frames for its last part, so the compositor failed the export (a hard
+      // cut) and the ramps drew nothing for the outgoing clip. Spreading what
+      // the track holds over the blend matches Android, which spreads the
+      // frames it decodes.
+      let outVideoRange = CMTimeRangeGetIntersection(
+        CMTimeRange(start: outStart, duration: outTailDur),
+        otherRange: await TrackEndTrimmer.timeRange(of: outVideo))
+      let inVideoRange = CMTimeRangeGetIntersection(
+        CMTimeRange(start: inStart, duration: inHeadDur),
+        otherRange: await TrackEndTrimmer.timeRange(of: inVideo))
+      guard outVideoRange.duration > .zero, inVideoRange.duration > .zero else { return nil }
+      try trackA.insertTimeRange(outVideoRange, of: outVideo, at: .zero)
+      try trackB.insertTimeRange(inVideoRange, of: inVideo, at: .zero)
 
       // Apply each side's playback speed by scaling its inserted span to the
       // shared output duration, so the footage inside the blend plays at the
       // requested speed (the ramps below all run over the output duration `d`).
-      if outTailDur != d {
+      if outVideoRange.duration != d {
         trackA.scaleTimeRange(
-          CMTimeRange(start: .zero, duration: outTailDur), toDuration: d)
+          CMTimeRange(start: .zero, duration: outVideoRange.duration), toDuration: d)
       }
-      if inHeadDur != d {
+      if inVideoRange.duration != d {
         trackB.scaleTimeRange(
-          CMTimeRange(start: .zero, duration: inHeadDur), toDuration: d)
+          CMTimeRange(start: .zero, duration: inVideoRange.duration), toDuration: d)
       }
 
       let transformA = try await loadPreferredTransform(outVideo)
@@ -171,28 +184,42 @@ internal enum ClipTransitionRenderer {
           outgoingAudio: outgoingAudio, incomingAudio: incomingAudio)
       }
 
-      // Build the layer instructions with eased ramps.
-      let layerA = AVMutableVideoCompositionLayerInstruction(assetTrack: trackA)
-      let layerB = AVMutableVideoCompositionLayerInstruction(assetTrack: trackB)
-      layerA.setTransform(transformA, at: .zero)
-      layerB.setTransform(transformB, at: .zero)
-
-      applyRamps(
-        type: type, direction: direction, curve: curve,
-        layerA: layerA, layerB: layerB,
-        transformA: transformA, transformB: transformB,
-        renderSize: renderSize, naturalB: naturalB, duration: d, steps: steps)
-
-      let instruction = AVMutableVideoCompositionInstruction()
-      instruction.timeRange = CMTimeRange(start: .zero, duration: d)
-      // First layer instruction is composited on top.
-      instruction.layerInstructions = orderedLayers(
-        type: type, layerA: layerA, layerB: layerB)
-
       let videoComposition = AVMutableVideoComposition()
       videoComposition.renderSize = renderSize
       videoComposition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFps))
-      videoComposition.instructions = [instruction]
+
+      if ClipTransitionEffects.handles(type) {
+        // Zooms, turns, blurs and flashes need both frames at once, which
+        // layer instructions cannot give; a compositor draws each frame.
+        videoComposition.customVideoCompositorClass = ClipTransitionCompositor.self
+        videoComposition.instructions = [
+          ClipTransitionInstruction(
+            timeRange: CMTimeRange(start: .zero, duration: d),
+            outgoingTrackID: trackA.trackID, incomingTrackID: trackB.trackID,
+            outgoingTransform: transformA, incomingTransform: transformB,
+            type: type, direction: direction, curve: curve,
+            frameDuration: videoComposition.frameDuration)
+        ]
+      } else {
+        // Build the layer instructions with eased ramps.
+        let layerA = AVMutableVideoCompositionLayerInstruction(assetTrack: trackA)
+        let layerB = AVMutableVideoCompositionLayerInstruction(assetTrack: trackB)
+        layerA.setTransform(transformA, at: .zero)
+        layerB.setTransform(transformB, at: .zero)
+
+        applyRamps(
+          type: type, direction: direction, curve: curve,
+          layerA: layerA, layerB: layerB,
+          transformA: transformA, transformB: transformB,
+          renderSize: renderSize, naturalB: naturalB, duration: d, steps: steps)
+
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = CMTimeRange(start: .zero, duration: d)
+        // First layer instruction is composited on top.
+        instruction.layerInstructions = orderedLayers(
+          type: type, layerA: layerA, layerB: layerB)
+        videoComposition.instructions = [instruction]
+      }
 
       // Export.
       let outputURL = temporaryURL(for: outputFormat)

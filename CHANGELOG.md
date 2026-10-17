@@ -1,3 +1,8 @@
+## 2.38.0
+- **FEAT**(android, iOS, macOS): Nine more overlap clip transitions: `zoomIn`, `zoomOut`, `spin`, `whipPan`, `blur`, `glitch`, `flash`, `iris` and `stretch`; `whipPan` and `stretch` take a direction. `ClipTransitionType.isDip`, `isOverlap`, `usesDirection` and `flashes` tell the types apart, so an app no longer hard-codes them and can keep flashes within WCAG 2.3.1.
+- **PERF**(android): Dissolve, slide, push and wipe pre-render several times faster, with the same output.
+- **FIX**(iOS, macOS): An overlap transition out of a clip whose file runs past its last video frame no longer loses the outgoing clip for the rest of the blend.
+
 ## 2.37.0
 - **FEAT**(android): `RenderEncoderException.codecKind` says whether a decoder or the encoder could not be acquired, and `RenderEncoderException.details` keeps what the platform reported. Only a decoder shortage is fixed by fewer layers or released preview players, so an app can now tell the user what to change.
 

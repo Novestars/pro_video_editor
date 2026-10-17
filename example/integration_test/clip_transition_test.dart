@@ -76,12 +76,9 @@ void main() {
   // Overlap transitions — blend the clips and shorten the output
   // ───────────────────────────────────────────────────────────
   group('Clip transitions — overlap (shorten timeline)', () {
-    const overlapTypes = [
-      ClipTransitionType.dissolve,
-      ClipTransitionType.slide,
-      ClipTransitionType.push,
-      ClipTransitionType.wipe,
-    ];
+    final overlapTypes = ClipTransitionType.values.where(
+      (type) => type.isOverlap,
+    );
 
     for (final type in overlapTypes) {
       testWidgets(type.name, (_) async {
@@ -103,10 +100,7 @@ void main() {
   // Dip transitions — dip through a color, duration unchanged
   // ───────────────────────────────────────────────────────────
   group('Clip transitions — dip (keep duration)', () {
-    const dipTypes = [
-      ClipTransitionType.fadeToBlack,
-      ClipTransitionType.fadeToWhite,
-    ];
+    final dipTypes = ClipTransitionType.values.where((type) => type.isDip);
 
     for (final type in dipTypes) {
       testWidgets(type.name, (_) async {
@@ -128,11 +122,9 @@ void main() {
   // Directional transitions × all directions
   // ───────────────────────────────────────────────────────────
   group('Clip transitions — directions', () {
-    const directionalTypes = [
-      ClipTransitionType.slide,
-      ClipTransitionType.push,
-      ClipTransitionType.wipe,
-    ];
+    final directionalTypes = ClipTransitionType.values.where(
+      (type) => type.usesDirection,
+    );
 
     for (final type in directionalTypes) {
       for (final dir in ClipTransitionDirection.values) {
@@ -548,6 +540,49 @@ void main() {
         lessThan(4),
         reason: 'the frame at $sampleAt must show the dissolve in both renders',
       );
+    });
+
+    testWidgets('a clip whose container outlasts its video blends with every '
+        'overlap type', (_) async {
+      // The blend's outgoing side reaches into the last ~0.5 s of
+      // demo_world.mp4, which holds no video. iOS and macOS drew the newer
+      // types with nothing there and fell back to a hard cut, which runs
+      // longer than the dissolve.
+      Future<double> secondsWith(ClipTransitionType type) async {
+        final result = await ProVideoEditor.instance.renderVideo(
+          VideoRenderData(
+            outputFormat: VideoOutputFormat.mp4,
+            videoSegments: [
+              VideoSegment(
+                video: EditorVideo.asset(kVideoEditorExampleAssetWorldPath),
+                startTime: const Duration(seconds: 29),
+                transition: ClipTransition(
+                  type: type,
+                  duration: overlapDuration,
+                ),
+              ),
+              VideoSegment(
+                video: inputVideo,
+                startTime: Duration.zero,
+                endTime: windowDuration,
+              ),
+            ],
+          ),
+        );
+        final meta = await ProVideoEditor.instance.getMetadata(
+          EditorVideo.memory(result),
+        );
+        return meta.duration.inMilliseconds / 1000;
+      }
+
+      final dissolveSeconds = await secondsWith(ClipTransitionType.dissolve);
+      for (final type in ClipTransitionType.values.where((t) => t.isOverlap)) {
+        expect(
+          await secondsWith(type),
+          closeTo(dissolveSeconds, 0.1),
+          reason: '${type.name} must blend like the dissolve, not cut',
+        );
+      }
     });
   });
 
