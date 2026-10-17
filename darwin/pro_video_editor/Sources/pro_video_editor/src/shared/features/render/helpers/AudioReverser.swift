@@ -177,7 +177,7 @@ internal enum AudioReverser {
 
   // MARK: - Private helpers
 
-  private static func readPcm(
+  static func readPcm(
     from asset: AVAsset,
     track: AVAssetTrack,
     start: CMTime,
