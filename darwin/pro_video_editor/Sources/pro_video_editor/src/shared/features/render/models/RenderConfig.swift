@@ -291,7 +291,7 @@ public struct ImageLayerConfig: Sendable {
   let image: EncodedImage
   let startUs: Int64
   /// endUs of -1 indicates the image should be displayed until the end of the video.
-  let endUs: Int64
+  var endUs: Int64
   /// x position in pixels. When nil, the image is stretched to fill the video frame.
   let x: Int64?
   /// y position in pixels. When nil, the image is stretched to fill the video frame.
@@ -326,6 +326,9 @@ public struct ImageLayerConfig: Sendable {
   /// Draws bars or a wave that move with the sound in the layer's box instead
   /// of `image`, which is then not read. `nil` draws the image.
   var audioVisualizer: LayerAudioVisualizerConfig? = nil
+  /// How the layer combines with the picture beneath it; see `blendLayer`.
+  /// A censor layer draws nothing and ignores it.
+  var blendMode: LayerBlendMode = .normal
 
   static func fromArguments(_ args: [String: Any]?) -> ImageLayerConfig? {
     guard let args = args,
@@ -365,7 +368,8 @@ public struct ImageLayerConfig: Sendable {
       keyframes: KeyframeConfig.list(from: args["keyframes"]),
       keyframeClock: KeyframeClock.from(args["keyframeClock"]),
       audioVisualizer: LayerAudioVisualizerConfig.fromArguments(
-        args["audioVisualizer"] as? [String: Any])
+        args["audioVisualizer"] as? [String: Any]),
+      blendMode: LayerBlendMode.from(args["blendMode"])
     )
   }
 }
@@ -678,6 +682,9 @@ struct LayerConfig: Sendable {
   var keyframes: [KeyframeConfig] = []
   /// The clock `keyframes` are timed on; see `KeyframeClock`.
   var keyframeClock: KeyframeClock = .output
+  /// How the layer's clips combine with the layers below them; see
+  /// `blendLayer`.
+  var blendMode: LayerBlendMode = .normal
 
   static func fromArguments(_ args: [String: Any]?) -> LayerConfig? {
     guard let args = args,
@@ -692,7 +699,8 @@ struct LayerConfig: Sendable {
       chromaKey: ChromaKeyConfig.fromArguments(args["chromaKey"] as? [String: Any]),
       mask: EncodedImage.from(args, pathKey: "maskPath", dataKey: "maskData"),
       keyframes: KeyframeConfig.list(from: args["keyframes"]),
-      keyframeClock: KeyframeClock.from(args["keyframeClock"])
+      keyframeClock: KeyframeClock.from(args["keyframeClock"]),
+      blendMode: LayerBlendMode.from(args["blendMode"])
     )
   }
 }
