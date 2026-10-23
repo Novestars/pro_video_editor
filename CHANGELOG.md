@@ -1,3 +1,7 @@
+## 2.43.1
+- **FIX**(iOS, macOS): A clip whose first video frame starts a few milliseconds late, as in many ffmpeg transcodes and fragmented mp4s, no longer opens with a black frame and plays one frame late; it starts on its first frame, as on Android.
+- **FIX**(iOS, macOS): A layered composition ends a clip at its last video frame, as on Android, instead of showing the layer below while the container runs on.
+
 ## 2.43.0
 - **FEAT**(android, iOS, macOS): Audio ducking. `AudioDucking.analyze` turns voice-over tracks into an `AudioVolumeCurve` that lowers the music while somebody talks, and `VideoAudioTrack.volumeCurve` applies any such curve in the render.
 - **FIX**(android, iOS, macOS): `getWaveform` keeps time at sample rates that `high` and `ultra` do not divide evenly, like 44.1 kHz, and Android no longer stretches audio with more than two channels.

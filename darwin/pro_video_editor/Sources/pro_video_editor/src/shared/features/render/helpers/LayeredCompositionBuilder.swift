@@ -95,9 +95,22 @@ internal class LayeredCompositionBuilder {
         let asset = AVURLAsset(url: URL(fileURLWithPath: clip.inputPath))
         guard let assetVideoTrack = await firstTrack(asset, .video) else { continue }
 
-        let assetDurationUs = await durationUs(of: asset)
-        let srcStartUs = max(0, clip.startUs ?? 0)
-        let srcEndUs = clip.endUs ?? assetDurationUs
+        // Play from the video's first frame to its last, as the single-track
+        // path does: a short delay before the first frame, or a container
+        // that outlasts its video (demo_world.mp4 by ~0.45 s), would leave the
+        // layer without a frame there and show what lies beneath it.
+        let media = await TrackEndTrimmer.mediaTimeRange(of: assetVideoTrack)
+        let mediaStartUs = CMTimeConvertScale(
+          media.start, timescale: 1_000_000, method: .roundAwayFromZero
+        ).value
+        let mediaEndUs =
+          media.duration > .zero
+          ? CMTimeConvertScale(
+            CMTimeRangeGetEnd(media), timescale: 1_000_000, method: .roundAwayFromZero
+          ).value
+          : await durationUs(of: asset)
+        let srcStartUs = max(mediaStartUs, clip.startUs ?? 0)
+        let srcEndUs = min(mediaEndUs, clip.endUs ?? mediaEndUs)
         let srcDurUs = srcEndUs - srcStartUs
         guard srcDurUs > 0 else { continue }
 
