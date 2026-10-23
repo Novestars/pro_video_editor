@@ -1,3 +1,7 @@
+## 2.43.0
+- **FEAT**(android, iOS, macOS): Audio ducking. `AudioDucking.analyze` turns voice-over tracks into an `AudioVolumeCurve` that lowers the music while somebody talks, and `VideoAudioTrack.volumeCurve` applies any such curve in the render.
+- **FIX**(android, iOS, macOS): `getWaveform` keeps time at sample rates that `high` and `ultra` do not divide evenly, like 44.1 kHz, and Android no longer stretches audio with more than two channels.
+
 ## 2.42.0
 - **FEAT**(android, iOS, macOS): Blend modes. `ImageLayer.blendMode` and `VideoLayer.blendMode` blend a layer with the picture beneath it (`multiply`, `screen`, `overlay`, `softLight`, `darken`, `lighten`, `add`, `difference`), e.g. for a double exposure or a light leak. `LayerBlendMode.blendMode` is the Flutter `BlendMode` that previews the same result.
 
