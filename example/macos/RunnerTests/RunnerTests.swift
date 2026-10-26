@@ -4580,6 +4580,79 @@ final class BitrateCappedAACTests: XCTestCase {
   }
 }
 
+// MARK: - Bitrate-capped color
+
+/// A capped render has to tag its color space like the export-session path
+/// does. Without `AVVideoColorPropertiesKey` the writer kept the primaries and
+/// transfer function of a BT.709 source but left the matrix unspecified, and
+/// tagged nothing at all for an untagged source. The pixels were BT.709 either
+/// way, but FFmpeg-based players and transcoders read an unspecified matrix as
+/// BT.601 and shifted the colors.
+final class BitrateCappedColorTests: XCTestCase {
+
+  func testACappedRenderTagsTheVideoAsBT709() async throws {
+    let bt709: [String: Any] = [
+      AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+      AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+      AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+    ]
+    let expected = [
+      kCMFormatDescriptionColorPrimaries_ITU_R_709_2,
+      kCMFormatDescriptionTransferFunction_ITU_R_709_2,
+      kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2,
+    ].map { $0 as String }
+    let sources: [(String, [String: Any]?)] = [("BT.709 source", bt709), ("untagged source", nil)]
+    for (name, colorProperties) in sources {
+      let tags = try await renderCapped(colorProperties: colorProperties)
+      XCTAssertEqual(tags, expected, name)
+    }
+  }
+
+  /// Renders a 1 s clip with a bitrate cap and returns the output's color
+  /// primaries, transfer function and YCbCr matrix, "unset" where one is
+  /// missing.
+  private func renderCapped(colorProperties: [String: Any]?) async throws -> [String] {
+    let source = try ThumbnailTimestampFixture.makeColorVideo(
+      colors: [ThumbnailTimestampFixture.palette[0]], colorProperties: colorProperties)
+    defer { try? FileManager.default.removeItem(at: source) }
+    let output = FileManager.default.temporaryDirectory
+      .appendingPathComponent("pve_capped_color_\(UUID().uuidString).mp4")
+    defer { try? FileManager.default.removeItem(at: output) }
+
+    // Without audio the clip is not eligible for the lossless passthrough, so
+    // the cap renders through `BitrateCappedExporter`.
+    let config = try XCTUnwrap(
+      RenderConfig.fromArguments([
+        "videoClips": [["inputPath": source.path]],
+        "outputPath": output.path,
+        "outputFormat": "mp4",
+        "enableAudio": false,
+        "bitrate": 500_000,
+      ]))
+    let settled = expectation(description: "render settles")
+    var failure: Error?
+    RenderVideo.render(
+      config: config,
+      onProgress: { _ in },
+      onComplete: { _ in settled.fulfill() },
+      onError: { error in
+        failure = error
+        settled.fulfill()
+      })
+    await fulfillment(of: [settled], timeout: 120)
+    XCTAssertNil(failure)
+
+    let track = try await AVURLAsset(url: output).loadTracks(withMediaType: .video).first
+    let descriptions = try await XCTUnwrap(track).load(.formatDescriptions)
+    let description = try XCTUnwrap(descriptions.first)
+    return [
+      kCMFormatDescriptionExtension_ColorPrimaries,
+      kCMFormatDescriptionExtension_TransferFunction,
+      kCMFormatDescriptionExtension_YCbCrMatrix,
+    ].map { CMFormatDescriptionGetExtension(description, extensionKey: $0) as? String ?? "unset" }
+  }
+}
+
 /// Pins the shape mask on the Apple renderer: how its keyframes change it and
 /// how it is drawn, against the `LayerMask` of pro_image_editor, which draws
 /// the editor preview, and Android's `ShapeMaskPainter`.

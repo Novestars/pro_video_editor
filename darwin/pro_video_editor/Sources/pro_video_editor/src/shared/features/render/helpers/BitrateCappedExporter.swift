@@ -192,6 +192,16 @@ internal enum BitrateCappedExporter {
       AVVideoCodecKey: AVVideoCodecType.h264,
       AVVideoWidthKey: width,
       AVVideoHeightKey: height,
+      // Tag the color space, as the export-session path does. Without this key
+      // the encoder still converts with the BT.709 matrix but leaves the matrix
+      // unspecified (and every other tag too, for an untagged source), so
+      // FFmpeg-based players and transcoders decode the video as BT.601 and
+      // shift its colors.
+      AVVideoColorPropertiesKey: [
+        AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+        AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+        AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+      ],
       AVVideoCompressionPropertiesKey: [
         AVVideoAverageBitRateKey: videoBitrate,
         // Disable B-frames. Frame reordering forces a composition-time offset
