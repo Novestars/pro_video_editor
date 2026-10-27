@@ -2257,47 +2257,119 @@ final class BitrateCappedAACTests: XCTestCase {
 /// tagged nothing at all for an untagged source. The pixels were BT.709 either
 /// way, but FFmpeg-based players and transcoders read an unspecified matrix as
 /// BT.601 and shifted the colors.
+///
+/// A BT.601 source is the exception: its frames reach the writer in SMPTE-C
+/// primaries, which the writer only relabels, so the capped render has to
+/// convert them itself, as the export-session path does.
 final class BitrateCappedColorTests: XCTestCase {
 
+  private static let bt709: [String: Any] = [
+    AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+    AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+    AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+  ]
+
+  /// SD colorimetry, as an SD camera or many Android phones tag their video.
+  private static let bt601: [String: Any] = [
+    AVVideoColorPrimariesKey: AVVideoColorPrimaries_SMPTE_C,
+    AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+    AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_601_4,
+  ]
+
+  private static let bt709Tags = [
+    kCMFormatDescriptionColorPrimaries_ITU_R_709_2,
+    kCMFormatDescriptionTransferFunction_ITU_R_709_2,
+    kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2,
+  ].map { $0 as String }
+
   func testACappedRenderTagsTheVideoAsBT709() async throws {
-    let bt709: [String: Any] = [
-      AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-      AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-      AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+    let sources: [(String, [String: Any]?)] = [
+      ("BT.709 source", Self.bt709), ("BT.601 source", Self.bt601), ("untagged source", nil),
     ]
-    let expected = [
-      kCMFormatDescriptionColorPrimaries_ITU_R_709_2,
-      kCMFormatDescriptionTransferFunction_ITU_R_709_2,
-      kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2,
-    ].map { $0 as String }
-    let sources: [(String, [String: Any]?)] = [("BT.709 source", bt709), ("untagged source", nil)]
     for (name, colorProperties) in sources {
-      let tags = try await renderCapped(colorProperties: colorProperties)
-      XCTAssertEqual(tags, expected, name)
+      let source = try ThumbnailTimestampFixture.makeColorVideo(
+        colors: [ThumbnailTimestampFixture.palette[0]], colorProperties: colorProperties)
+      defer { try? FileManager.default.removeItem(at: source) }
+      let output = try await render(source, bitrate: 500_000)
+      defer { try? FileManager.default.removeItem(at: output) }
+      let tags = try await Self.colorTags(of: output)
+      XCTAssertEqual(tags, Self.bt709Tags, name)
     }
   }
 
-  /// Renders a 1 s clip with a bitrate cap and returns the output's color
-  /// primaries, transfer function and YCbCr matrix, "unset" where one is
-  /// missing.
-  private func renderCapped(colorProperties: [String: Any]?) async throws -> [String] {
+  /// Relabeled, the SMPTE-C red of a BT.601 source turned from about
+  /// (246, 36, 0) into (252, 0, 2), and its green lost its red.
+  func testACappedRenderShowsABT601SourceInTheColorsOfAnUncappedRender() async throws {
     let source = try ThumbnailTimestampFixture.makeColorVideo(
-      colors: [ThumbnailTimestampFixture.palette[0]], colorProperties: colorProperties)
+      colors: [(255, 0, 0), (0, 255, 0)], colorProperties: Self.bt601)
     defer { try? FileManager.default.removeItem(at: source) }
+    let capped = try await render(source, bitrate: 500_000)
+    defer { try? FileManager.default.removeItem(at: capped) }
+    let uncapped = try await render(source, bitrate: nil)
+    defer { try? FileManager.default.removeItem(at: uncapped) }
+
+    for seconds in [0.5, 1.5] {
+      let cappedColor = try XCTUnwrap(Self.frameColor(of: capped, at: seconds))
+      let uncappedColor = try XCTUnwrap(Self.frameColor(of: uncapped, at: seconds))
+      let channels = [
+        (cappedColor.r, uncappedColor.r), (cappedColor.g, uncappedColor.g),
+        (cappedColor.b, uncappedColor.b),
+      ]
+      for (capped, uncapped) in channels {
+        XCTAssertLessThanOrEqual(
+          abs(Int(capped) - Int(uncapped)), 8,
+          "at \(seconds) s the capped render shows \(cappedColor), "
+            + "the uncapped one \(uncappedColor)")
+      }
+    }
+  }
+
+  /// `StopMotionGenerator` writes H.264 through `AVAssetWriter` too, and left
+  /// its output without any color tag.
+  func testAStopMotionVideoIsTaggedAsBT709() async throws {
+    let output = FileManager.default.temporaryDirectory
+      .appendingPathComponent("pve_stop_motion_color_\(UUID().uuidString).mp4")
+    defer { try? FileManager.default.removeItem(at: output) }
+    let frame = try Self.png(ThumbnailTimestampFixture.palette[0])
+    let config = try XCTUnwrap(
+      StopMotionConfig.fromArguments([
+        "id": "stop_motion_color_\(UUID().uuidString)",
+        "frames": [["imageData": frame], ["imageData": frame]],
+        "frameRate": 2.0,
+        "outputPath": output.path,
+      ]))
+    let settled = expectation(description: "stop motion settles")
+    var failure: Error?
+    StopMotionGenerator.generate(
+      config: config,
+      onProgress: { _ in },
+      onComplete: { _ in settled.fulfill() },
+      onError: { error in
+        failure = error
+        settled.fulfill()
+      })
+    await fulfillment(of: [settled], timeout: 60)
+    if let failure { throw failure }
+
+    let tags = try await Self.colorTags(of: output)
+    XCTAssertEqual(tags, Self.bt709Tags)
+  }
+
+  /// Renders [source] to a new file, through `BitrateCappedExporter` when
+  /// [bitrate] is set and through the export session otherwise.
+  private func render(_ source: URL, bitrate: Int?) async throws -> URL {
     let output = FileManager.default.temporaryDirectory
       .appendingPathComponent("pve_capped_color_\(UUID().uuidString).mp4")
-    defer { try? FileManager.default.removeItem(at: output) }
-
-    // Without audio the clip is not eligible for the lossless passthrough, so
-    // the cap renders through `BitrateCappedExporter`.
-    let config = try XCTUnwrap(
-      RenderConfig.fromArguments([
-        "videoClips": [["inputPath": source.path]],
-        "outputPath": output.path,
-        "outputFormat": "mp4",
-        "enableAudio": false,
-        "bitrate": 500_000,
-      ]))
+    // With `enableAudio` off the clip is not eligible for the lossless
+    // passthrough, so a cap renders through `BitrateCappedExporter`.
+    var arguments: [String: Any] = [
+      "videoClips": [["inputPath": source.path]],
+      "outputPath": output.path,
+      "outputFormat": "mp4",
+      "enableAudio": false,
+    ]
+    if let bitrate { arguments["bitrate"] = bitrate }
+    let config = try XCTUnwrap(RenderConfig.fromArguments(arguments))
     let settled = expectation(description: "render settles")
     var failure: Error?
     RenderVideo.render(
@@ -2309,9 +2381,14 @@ final class BitrateCappedColorTests: XCTestCase {
         settled.fulfill()
       })
     await fulfillment(of: [settled], timeout: 120)
-    XCTAssertNil(failure)
+    if let failure { throw failure }
+    return output
+  }
 
-    let track = try await AVURLAsset(url: output).loadTracks(withMediaType: .video).first
+  /// The color primaries, transfer function and YCbCr matrix of the video in
+  /// [url], "unset" where one is missing.
+  private static func colorTags(of url: URL) async throws -> [String] {
+    let track = try await AVURLAsset(url: url).loadTracks(withMediaType: .video).first
     let descriptions = try await XCTUnwrap(track).load(.formatDescriptions)
     let description = try XCTUnwrap(descriptions.first)
     return [
@@ -2319,5 +2396,38 @@ final class BitrateCappedColorTests: XCTestCase {
       kCMFormatDescriptionExtension_TransferFunction,
       kCMFormatDescriptionExtension_YCbCrMatrix,
     ].map { CMFormatDescriptionGetExtension(description, extensionKey: $0) as? String ?? "unset" }
+  }
+
+  /// The average color of the frame [seconds] into [url], as AVFoundation
+  /// shows it.
+  private static func frameColor(of url: URL, at seconds: Double) throws
+    -> ThumbnailTimestampFixture.RGB?
+  {
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+    generator.requestedTimeToleranceBefore = .zero
+    generator.requestedTimeToleranceAfter = .zero
+    let image = try generator.copyCGImage(
+      at: CMTime(seconds: seconds, preferredTimescale: 600), actualTime: nil)
+    return ThumbnailTimestampFixture.averageColor(of: image)
+  }
+
+  /// A solid 160×90 PNG in [color].
+  private static func png(_ color: ThumbnailTimestampFixture.RGB) throws -> Data {
+    let context = try XCTUnwrap(
+      CGContext(
+        data: nil, width: 160, height: 90, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.setFillColor(
+      red: CGFloat(color.r) / 255, green: CGFloat(color.g) / 255,
+      blue: CGFloat(color.b) / 255, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: 160, height: 90))
+    let image = try XCTUnwrap(context.makeImage())
+    let data = NSMutableData()
+    let destination = try XCTUnwrap(
+      CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil))
+    CGImageDestinationAddImage(destination, image, nil)
+    XCTAssertTrue(CGImageDestinationFinalize(destination))
+    return data as Data
   }
 }

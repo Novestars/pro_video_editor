@@ -1,5 +1,5 @@
 ## 2.44.1
-- **FIX**(iOS, macOS): A render with a `bitrate` now tags its video as BT.709, as a render without one does. It left the color matrix unspecified, and for an untagged source every color tag, so FFmpeg-based players and transcoders decoded it as BT.601 and shifted the colors: #FFD60A came out as #F9DF14.
+- **FIX**(iOS, macOS): Videos re-encoded for a `bitrate` and stop-motion videos are now tagged BT.709, so FFmpeg-based players no longer shift their colors. A capped render also shows a BT.601 source in the same colors as an uncapped one.
 
 ## 2.44.0
 - **FEAT**(android, iOS, macOS): Shape masks that change over time. `VideoLayer.shapeMask` and `ImageLayer.shapeMask` take a `LayerShapeMask` with the shapes of pro_image_editor's `LayerMask`, and its keyframes move, resize, turn and soften it, so a mask can reveal a clip or wipe across it.
