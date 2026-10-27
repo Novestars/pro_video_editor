@@ -4,7 +4,8 @@ import Foundation
 import ImageIO
 
 struct ImageLayer {
-  /// Decoded frames: one for a static image, several for an animated GIF.
+  /// Decoded frames: one for a static image, several for an animated GIF or
+  /// a frame sequence.
   let frames: [CIImage]
   /// Cumulative end time (µs) of each frame within one playthrough; the last
   /// entry is one playthrough's length, 0 for a static image.
@@ -114,6 +115,28 @@ private func decodeGifFrames(_ image: EncodedImage) -> (
     frameEndsUs.append(accUs)
   }
   if frames.count <= 1 || accUs <= 0 { return nil }
+  return (frames, frameEndsUs)
+}
+
+/// A layer's frame sequence as frames and a timeline like a GIF's, or nil when
+/// a frame does not decode: a sequence with a hole would jump past it.
+///
+/// The frames stay encoded until they are drawn, so a long sequence holds its
+/// encoded bytes rather than a decoded image for every frame.
+private func decodeFrameSequence(_ sequence: [ImageLayerFrameConfig]) -> (
+  frames: [CIImage], frameEndsUs: [Int64]
+)? {
+  var frames: [CIImage] = []
+  var frameEndsUs: [Int64] = []
+  var accUs: Int64 = 0
+  for frame in sequence {
+    guard let image = decodeOrientedImage(frame.image, cache: false) else { return nil }
+    // The caller picks the durations, and an overflowing sum would trap.
+    let (sum, overflow) = accUs.addingReportingOverflow(frame.durationUs)
+    accUs = overflow ? .max : sum
+    frames.append(image)
+    frameEndsUs.append(accUs)
+  }
   return (frames, frameEndsUs)
 }
 
@@ -450,7 +473,14 @@ class VideoCompositor: NSObject, AVVideoCompositing {
     let frames: [CIImage]
     let frameEndsUs: [Int64]
 
-    if let gif = decodeGifFrames(layer.image) {
+    if !layer.frames.isEmpty, layer.censor == nil {
+      // A frame sequence plays like the frames of a GIF, from this one layer.
+      // A censor layer keeps to its one mask image, whose failure to decode
+      // fails the render rather than skipping the layer.
+      guard let sequence = decodeFrameSequence(layer.frames) else { return }
+      frames = sequence.frames
+      frameEndsUs = sequence.frameEndsUs
+    } else if let gif = decodeGifFrames(layer.image) {
       // Animated GIF: keep every frame and its timeline.
       frames = gif.frames
       frameEndsUs = gif.frameEndsUs
