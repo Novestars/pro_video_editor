@@ -1,5 +1,6 @@
 ## 2.44.1
-- **FIX**(iOS, macOS): Videos re-encoded for a `bitrate` and stop-motion videos are now tagged BT.709, so FFmpeg-based players no longer shift their colors. A capped render also shows a BT.601 source in the same colors as an uncapped one.
+- **FIX**(iOS, macOS): Videos re-encoded for a `bitrate` and stop-motion videos are tagged BT.709, so FFmpeg-based players no longer shift their colors.
+- **FIX**(iOS, macOS): A render with a `bitrate` shows a BT.601 source in the same colors as one without.
 
 ## 2.44.0
 - **FEAT**(android, iOS, macOS): Shape masks that change over time. `VideoLayer.shapeMask` and `ImageLayer.shapeMask` take a `LayerShapeMask` with the shapes of pro_image_editor's `LayerMask`, and its keyframes move, resize, turn and soften it, so a mask can reveal a clip or wipe across it.
